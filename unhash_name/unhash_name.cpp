@@ -376,6 +376,7 @@ void do_unhash(unsigned long accum,
 			if (crc == accum) {
 				printf("\"%s%s\"\n", prefix, postfix);
 			}
+			continue;
 		}
 #ifndef BENCHMARK
 		// large and unruly nested switch statements with

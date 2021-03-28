@@ -14,12 +14,12 @@ arguments:
   POST     constant ASCII name postfix
   MAX      maximum character length to test
   MIN      minimum character length to test
-  CHARSET  list of characters for pattern (accepts ranges and '\\' escapes)
+  CHARSET  list of characters for pattern (accepts ranges and '\' escapes)
 ```
 
 Charset is defined similarly to a Regex range: *(`[a-z_]`)*. For example: `A-z` will be substituted with a range of all ASCII characters from `A` - `z`, *including* the symbols that appear between the upper and lowercase letters.
 
-Characters *not* next to a dash will include only themselves. Use `\\` to define a backslash, and `\-` to define a dash. There is no error handling or checking for duplicate letters.
+Characters *not* next to a dash will include only themselves. Use `\\` to define a backslash, and `\-` to define a dash.
 
 ### Examples
 
