@@ -523,27 +523,31 @@ int main(int argc, char *argv[]) {
 	int min_len = 0;   // default
 	char charset[0x200];  // arbitrary extra room for error reporting duplicates
 
+	int k = 1;
 	// parse argument: <accum> (accumulator, CRC-32 value)
-	if (argv[1][0] == '$')  // support for $ hex prefix
-		accum = strtoul(argv[1] + 1, nullptr, 16);
+	if (argv[k][0] == '$')  // support for $ hex prefix
+		accum = strtoul(argv[k] + 1, nullptr, 16);
 	else  // otherwise parse based on prefix or no prefix
-		accum = strtoul(argv[1], nullptr, 0);
+		accum = strtoul(argv[k], nullptr, 0);
+	k++;
 
 	// parse argument: [prefix=]
-	if (argc >= 3)
-		strcpy(prefix, argv[2]);
+	if (argc > k)
+		strcpy(prefix, argv[k]);
 	else
 		prefix[0] = '\0';
+	k++;
 
 	// parse argument: [postfix=]
-	if (argc >= 4)
-		strcpy(postfix, argv[3]);
+	if (argc > k)
+		strcpy(postfix, argv[k]);
 	else
 		postfix[0] = '\0';
+	k++;
 
 	// parse argument: [max_len=16]
-	if (argc >= 5) {
-		max_len = (int)strtol(argv[4], nullptr, 0);
+	if (argc > k) {
+		max_len = (int)strtol(argv[k], nullptr, 0);
 		if (max_len > 0x200) {
 			// dumb extra constraint because everything is a local buffer (SPEED BABY! SPEED!)
 			fprintf(stderr, "error: max_len %d is greater than 512!\n", max_len);
@@ -553,10 +557,11 @@ int main(int argc, char *argv[]) {
 			return 1;
 		}
 	}
+	k++;
 
 	// parse argument: [min_len=0]
-	if (argc >= 6) {
-		min_len = (int)strtol(argv[5], nullptr, 0);
+	if (argc > k) {
+		min_len = (int)strtol(argv[k], nullptr, 0);
 		if (min_len > max_len) {
 			fprintf(stderr, "error: min_len %d is greater than max_len %d!\n", min_len, max_len);
 			return 1;
@@ -565,13 +570,14 @@ int main(int argc, char *argv[]) {
 			return 1;
 		}
 	}
+	k++;
 
 	// parse argument: [charset=a-z_0-9]
-	if (argc < 7) {
+	if (argc <= k) {
 		strcpy(charset, "abcdefghijklmnopqrstuvwxyz_0123456789"); // default charset
 	} else {
 		char* charset_ptr = &charset[0];
-		const char* pattern = argv[6];
+		const char* pattern = argv[k];
 		int pattern_len = (int)strlen(pattern);
 		for (int i = 0; i < pattern_len; i++) {
 			char c = pattern[i];
@@ -663,6 +669,7 @@ int main(int argc, char *argv[]) {
 			return 1;
 		}
 	}
+	k++;
 
 	do_unhash(accum, prefix, postfix, (unsigned int)max_len, (unsigned int)min_len, charset);
 	return 0;
