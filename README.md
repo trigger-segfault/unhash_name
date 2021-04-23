@@ -19,14 +19,14 @@ arguments:
 
 Charset is defined similarly to a Regex range: *(`[a-z_]`)*. For example: `A-z` will be substituted with a range of all ASCII characters from `A` - `z`, *including* the symbols that appear between the upper and lowercase letters.
 
-Characters *not* next to a dash will include only themselves. Use `\\` to define a backslash, and `\-` to define a dash.
+Characters *not* next to a dash will include only themselves. Use `\\` to define a backslash, and `\-` to define a dash. To work with the full ASCII range, use "` -~`" or "`!-~`" to skip space.
 
 ### Examples
 
 ```bat
 C:\>unhash $a3d0623b "_start" "@" 7 1 "a-z_"
 charset = "abcdefghijklmnopqrstuvwxyz_"
-init = 0x1541b913
+accum = 0xa3d0623b, init = 0x1541b913, target = 0x63083f04
 depth = 1
 depth = 2
 depth = 3
@@ -44,7 +44,7 @@ depth = 7
 
 It's much easier to find an unhashed name by throwing common or expected keywords into the prefix and/or postfix.
 
-The prefix is only run through CRC-32 once, with that result being fed to all future calls to CRC-32 for the generated names. This is not the case for postfixes. So longer postfixes will increase calculation time, while longer prefixes have zero impact on calculation time.
+The prefix **and now postfix** are only run through CRC-32 once, with that result being fed to -and compared with- all future calls to CRC-32 for the generated names. Both prefix and postfix can be as long as needed without impacting performance.
 
 The best usage of this tool is not to run once and let it sit. It's recommended to make numerous attempts with manual changes to the constant prefixes, postfixes and character set, until potential results are found.
 

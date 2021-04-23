@@ -4,11 +4,69 @@
 #define _CRC_SECURE_NO_WARNINGS
 //#define BENCHMARK
 
+// PREFERENCE: reverses the order of most-significant letter when scanning all variations of character set.
+//  charset = "ABC"
+//  0: AAAA -> BAAA -> CAAA -> ABAA -> BBAA -> CBAA -> ACAA ...
+//  1: AAAA -> AAAB -> AAAC -> AABA -> AABB -> AABC -> AACA ...
+#define REVERSE_SCAN 0
+
+// OPTIMIZATION: once a collision is found, dump current first/last 4 bytes and move onto changing 5th byte.
+// reasoning for this is that only ONE combination of 4 bytes can ever change one accum value A, to another B.
+// even if we don't know what the intermediate value is (when in forward scan), the fact that all remaining
+// bytes are the same, let's us know that these first 4 bytes can no longer produce a target result with
+// the remaining pattern.
+//  charset = "ABC"
+//  [ACBA]AA -> [AAAA]BA (forward)
+//  AA[ABCA] -> AB[AAAA] (reverse)
+#define COLLISION_DUMP_4 1
+
 #include <zlib.h>    // crc32
 #include <stdlib.h>
 #include <string.h>  // str*
 #include <stdio.h>   // printf
 
+
+////////////////////////////////////////////////////////////
+#pragma region INVERSE CRC32
+
+static unsigned long CRC32_TABLE[256] = { 0 };
+static unsigned long CRC32_INDICES[256] = { 0 };
+
+void inverse_init() {
+	if (CRC32_TABLE[0] != 0) // already initialized
+		return;
+
+	const unsigned long POLY = 0xEDB88320UL;
+	for (unsigned long n = 0; n < 256; n++) {
+		unsigned long c = n;
+		for (int k = 0; k < 8; k++) {
+			if ((c & 0x1UL) != 0UL)
+				c = (c >> 1) ^ POLY;
+			else
+				c >>= 1;
+		}
+		CRC32_TABLE[n] = c;
+		// most-significant byte of accum value is identical to that of last table entry
+		CRC32_INDICES[c >> 24] = n;
+	}
+}
+// use same parameter values as zlib for consistency
+// usage is identical to zlib crc32(),
+//  (though init should be fed the target accumulator instead of 0, and buf is read in reverse)
+uLong inverse_crc32(uLong crc, const Bytef* buf, uInt len) {
+	inverse_init();
+
+	crc ^= 0xffffffffUL;  // xorout
+	// order is fed in reverse to back-out accum value after len bytes
+	for (int i = (int)len - 1; i >= 0; i--) {
+		unsigned long x = CRC32_INDICES[crc >> 24]; // find index x of MSByte (where CRC_TABLE[x] == XX......)
+		unsigned long y = CRC32_TABLE[x]; // find last used crc table value
+		crc = ((crc ^ y) << 8) | (buf[i] ^ x);
+	}
+	return crc ^ 0xffffffffUL;  // xorout or init??
+}
+
+#pragma endregion
 
 ////////////////////////////////////////////////////////////
 #pragma region BENCHMARKING (for template and stack-local hell)
@@ -289,8 +347,9 @@ void unhash_fixed1(unsigned long accum,      // target CRC-32 result
 
 // non-templated unhash function for when a pattern or charset length has no matching template function
 void unhash_variable(unsigned int LEN,
-					 unsigned long accum,      // target CRC-32 result
+					 unsigned long accum,      // target CRC-32 result (including postfix in buffer)
 					 unsigned long init,       // initial value fed to crc32(), result of hashing prefix
+					 unsigned long target,     // target CRC-32 result, result of inverse hashing postfix
 					 const char* prefix,       // pattern prefix, only needed for printing results
 					 const char* postfix,      // pattern postfix, calculated with generated pattern
 					 const char* CHARSET,
@@ -299,28 +358,58 @@ void unhash_variable(unsigned int LEN,
 	///NOTE: arbitrary large lengths chosen
 	char buffer[0x400];  // buffer fed to crc32()
 	unsigned int levels[0x200] = { 0 };  // track charset indexes in the buffer
-	unsigned int buffer_len = LEN + (unsigned int)strlen(postfix);
+	unsigned int buffer_len = LEN;
 
-	// setup initial buffer state: "<CHARSET[0]>*LEN" + "<POSTFIX>"
-	strcpy(buffer + LEN, postfix);
+	// setup initial buffer state: "<CHARSET[0]>*LEN"
+	buffer[LEN] = 0; // null-terminate since that's no longer handled by strcpy
 	for (unsigned int j = 0; j < LEN; j++) {
 		levels[j] = 0;
 		buffer[j] = CHARSET[0];
 	}
 
+#if REVERSE_SCAN
+	int m;
+#else
 	unsigned int m;
+#endif
 	do {
 		// check current pattern
 		unsigned long crc = crc32(init, (const unsigned char*)buffer, buffer_len);
-		if (crc == accum) {
-			printf("\"%s%s\"\n", prefix, buffer); // buffer includes postfix
+		if (crc == target) {
+			printf("\"%s%s%s\"\n", prefix, buffer, postfix); // buffer does NOT include postfix anymore
+			// special handling: there is only ONE 4-byte combination to transform one accum A into another B
+#if COLLISION_DUMP_4
+			if (LEN >= 4) {
+				// we can give up the current forward (REVERSED_LOOKUP=0), or last 4 bytes
+				// this is only a minor optimization, since 4 ASCII bytes of depth is pretty fast to scan through
+				// (when LEN = 4, this behaves the same as a break;)
+				// next for loop iteration will push out last 4 chars from any combination:
+				//  charset = "ABC"
+#if REVERSE_SCAN
+				//  AA[ABCA] -> AB[AAAA]
+				for (unsigned int i = LEN - 4; i < LEN; i++) {
+#else
+				//  [ACBA]AA -> [AAAA]BA
+				for (unsigned int i = 0; i < 4; i++) {
+#endif
+					levels[i] = CHARSET_LEN - 1;
+				}
+			}
+#else
+			if (LEN == 4)
+				break;
+#endif
 			//break;  // keep going in-case we encounter garbage collisions
 		}
-
-		// change to next pattern
+		// change to next pattern (reversed)
 		//  charset = "ABC"
+#if REVERSE_SCAN
+		//  AAAA -> AAAB -> AAAC -> AABA -> AABB -> AABC -> AACA ...
+		for (m = LEN - 1; m >= 0; m--) {
+#else
 		//  AAAA -> BAAA -> CAAA -> ABAA -> BBAA -> CBAA -> ACAA ...
 		for (m = 0; m < LEN; m++) {
+#endif
 			unsigned int idx = ++levels[m];
 			if (idx != CHARSET_LEN) {
 				// letter incremented, break and calculate new pattern
@@ -333,8 +422,13 @@ void unhash_variable(unsigned int LEN,
 				buffer[m] = CHARSET[0];
 			}
 		}
+#if REVERSE_SCAN
+		// m = -1 when the for loop has finished without the break;
+	} while (m != -1);
+#else
 		// m = LEN when the for loop has finished without the break;
 	} while (m != LEN);
+#endif
 }
 
 #pragma endregion
@@ -355,13 +449,13 @@ void do_unhash(unsigned long accum,
 
 	// pre-calculate crc32(prefix) and use as the initial value from now on
 	unsigned long init = crc32(0, (const unsigned char*)prefix, (unsigned int)strlen(prefix));
-	printf("init = 0x%08x\n", (unsigned int)init);
+	unsigned long target = inverse_crc32(accum, (const unsigned char*)postfix, (unsigned int)strlen(postfix));
+	printf("accum = 0x%08x, init = 0x%08x, target = 0x%08x\n", (unsigned int)accum, (unsigned int)init, (unsigned int)target);
 
 	if (min_len == 0) {
 		min_len = 1;
 		printf("depth = %u\n", 0u);
-		unsigned long crc = crc32(init, (const unsigned char*)postfix, (unsigned int)strlen(postfix));
-		if (crc == accum) {
+		if (init == target) {
 			printf("\"%s%s\"\n", prefix, postfix);
 		}
 	}
@@ -372,8 +466,7 @@ void do_unhash(unsigned long accum,
 		printf("depth = %u\n", len);
 		if (len == 0) {
 			// special check for match with pattern length 0
-			unsigned long crc = crc32(init, (const unsigned char*)postfix, (unsigned int)strlen(postfix));
-			if (crc == accum) {
+			if (init == target) {
 				printf("\"%s%s\"\n", prefix, postfix);
 			}
 			continue;
@@ -385,11 +478,11 @@ void do_unhash(unsigned long accum,
 		//
 		// expects variables:  len, charset_len, accum, init, prefix, postfix, charset
 		//choose_unhash_len();
-		unhash_variable(len, accum, init, prefix, postfix, charset, charset_len);
+		unhash_variable(len, accum, init, target, prefix, postfix, charset, charset_len);
 #else
 		//choose_unhash_len_template();
 		//choose_unhash_len();
-		unhash_variable(len, accum, init, prefix, postfix, charset, charset_len);
+		unhash_variable(len, accum, init, target, prefix, postfix, charset, charset_len);
 #endif
 	}
 	benchmark_stop();
@@ -409,7 +502,7 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "usage: unhash.exe <ACCUM> [PRE=] [POST=] [MAX=16] [MIN=0] [CHARSET=a-z_0-9]\n");
 		return 1;
 	}
-	else if (!strcmp(argv[1], "/?") || !strcmp(argv[1], "-h") || !strcmp(argv[1], "--help")) {
+	else if (!strcmp(argv[1], "/?") || !stricmp(argv[1], "/h") || !strcmp(argv[1], "-h") || !strcmp(argv[1], "--help")) {
 		printf("usage: unhash.exe <ACCUM> [PRE=] [POST=] [MAX=16] [MIN=0] [CHARSET=a-z_0-9]\n");
 		printf("\n");
 		printf("arguments:\n");
@@ -424,10 +517,10 @@ int main(int argc, char *argv[]) {
 
 	///NOTE: arbitrary large lengths chosen
 	unsigned long accum;
-	char prefix[0x400];   // arbitrary length can be longer since we're not putting it with buffer[0x400]
-	char postfix[0x200];  // arbitrary length
-	int max_len = 16;
-	int min_len = 0;
+	char prefix[0x400];   // arbitrary length
+	char postfix[0x400];  // arbitrary length
+	int max_len = 16;  // default
+	int min_len = 0;   // default
 	char charset[0x200];  // arbitrary extra room for error reporting duplicates
 
 	// parse argument: <accum> (accumulator, CRC-32 value)
